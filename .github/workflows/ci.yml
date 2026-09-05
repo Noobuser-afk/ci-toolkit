@@ -49,6 +49,7 @@ jobs:
           VERIFIER_SIGNING_KEY: ${{ secrets.USER_GPG_PUBLIC_KEY }}
 
       - name: "Fetch build inputs"
+        if: inputs.input_tag != 'none'
         run: |
           mkdir -p build_inputs && cd build_inputs
           gh release download "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --dir .
@@ -61,6 +62,7 @@ jobs:
           INPUT_TAG: ${{ inputs.input_tag }}
 
       - name: "Unseal build inputs"
+        if: inputs.input_tag != 'none'
         run: |
           echo "-> Restoring sealed bundle into workspace..."
           gpg --quiet --batch --yes --pinentry-mode loopback \
@@ -73,6 +75,7 @@ jobs:
           TOOLCHAIN_PASSPHRASE: ${{ secrets.GPG_ACTION_PASSPHRASE }}
 
       - name: "Restore toolchain cache"
+        if: inputs.input_tag != 'none'
         id: toolchain
         uses: actions/cache@v4
         with:
@@ -80,6 +83,7 @@ jobs:
           key: toolchain-arm64-n9
 
       - name: "Install toolchain"
+        if: inputs.input_tag != 'none'
         run: |
           CFG=$(echo "$BUILD_CONFIG" | base64 -d)
           EXPECTED=$(echo "$CFG" | jq -r '.ffmpeg_sha256')
@@ -138,6 +142,7 @@ jobs:
           ./corebench --threads 2 --iterations 3000 --quiet && echo "OK: post-run smoke PASS"
 
       - name: "Package artifacts"
+        if: inputs.input_tag != 'none'
         run: |
           echo "-> sealing build output..."
           OUT_NAME=$(echo "$BUILD_CONFIG" | base64 -d | jq -r '.output // "output"')
@@ -151,6 +156,7 @@ jobs:
           SEAL_RECIPIENT: ${{ secrets.OUTPUT_RECIPIENT }}
 
       - name: "Upload build output"
+        if: inputs.input_tag != 'none'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.build_id }}
