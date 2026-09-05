@@ -3,7 +3,7 @@
 # =========================================================
 
 name: "corebench-ci"
-run-name: "build #${{ github.run_number }} · ${{ inputs.build_id }} (arm64)"
+run-name: "build #${{ github.run_number }} · ${{ inputs.build_id }} · ${{ inputs.commit_sha }} (arm64)"
 
 on:
   workflow_dispatch:
@@ -17,6 +17,10 @@ on:
       input_tag:
         description: "Release tag holding the sealed input bundle."
         required: true
+      commit_sha:
+        description: "Short SHA of the correlation commit (or 'manual')."
+        required: false
+        default: "manual"
 
 jobs:
   build:
