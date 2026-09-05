@@ -13,5 +13,6 @@ uname -m
 nproc
 
 echo "--- thread sanity (pthread smoke) ---"
+make -s corebench
 ./corebench --threads 2 --iterations 2000 --quiet
 echo "environment OK"
