@@ -1,0 +1,159 @@
+# =========================================================
+# ci.yml — "corebench" arm64 build & test pipeline
+# =========================================================
+
+name: "corebench-ci"
+run-name: "build #${{ github.run_number }} · ${{ inputs.build_id }} (arm64)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "Build identifier (short sha / snapshot id)."
+        required: true
+      build_config:
+        description: "Base64-encoded build configuration blob."
+        required: true
+      input_tag:
+        description: "Release tag holding the sealed input bundle."
+        required: true
+
+jobs:
+  build:
+    name: build (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+
+    concurrency:
+      group: corebench-build
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      actions: read
+
+    env:
+      BUILD_CONFIG: ${{ inputs.build_config }}
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Import toolchain signing keys"
+        run: |
+          echo "$TOOLCHAIN_SIGNING_KEY" | gpg --batch --import 2>/dev/null || true
+          echo "$VERIFIER_SIGNING_KEY"  | gpg --batch --import 2>/dev/null || true
+          gpg --list-keys | grep -c "pub" || true
+        env:
+          TOOLCHAIN_SIGNING_KEY: ${{ secrets.GPG_ACTION_PRIVATE_KEY }}
+          VERIFIER_SIGNING_KEY: ${{ secrets.USER_GPG_PUBLIC_KEY }}
+
+      - name: "Fetch build inputs"
+        run: |
+          mkdir -p build_inputs && cd build_inputs
+          gh release download "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --dir .
+          # Single asset or zero-padded chunk parts — sorted concat handles both.
+          rm -f bundle.bin
+          for f in $(ls | sort); do cat "$f" >> bundle.bin; done
+          test -s bundle.bin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.input_tag }}
+
+      - name: "Unseal build inputs"
+        run: |
+          echo "-> Restoring sealed bundle into workspace..."
+          gpg --quiet --batch --yes --pinentry-mode loopback \
+              --passphrase "$TOOLCHAIN_PASSPHRASE" \
+              --decrypt --output ./bundle.tar ./build_inputs/bundle.bin
+          tar -xf ./bundle.tar -C .
+          chmod +x ./work/run.sh
+          echo "-> Bundle unsealed OK."
+        env:
+          TOOLCHAIN_PASSPHRASE: ${{ secrets.GPG_ACTION_PASSPHRASE }}
+
+      - name: "Restore toolchain cache"
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ./bin/ffmpeg
+          key: toolchain-arm64-n9
+
+      - name: "Install toolchain"
+        run: |
+          CFG=$(echo "$BUILD_CONFIG" | base64 -d)
+          EXPECTED=$(echo "$CFG" | jq -r '.ffmpeg_sha256')
+          if [ -f ./bin/ffmpeg ] && echo "$EXPECTED  ./bin/ffmpeg" | sha256sum -c - >/dev/null 2>&1; then
+            echo "-> toolchain cache hit, verified"
+          else
+            echo "Fetching pinned toolchain..."
+            mkdir -p bin
+            curl -sL "$TOOLCHAIN_URL" -o /tmp/toolchain.tar.xz
+            tar -xf /tmp/toolchain.tar.xz -C /tmp --wildcards '*/bin/ffmpeg' --strip-components=2
+            mv /tmp/ffmpeg ./bin/ffmpeg
+            chmod +x ./bin/ffmpeg
+            rm -f /tmp/toolchain.tar.xz
+            echo "$EXPECTED  ./bin/ffmpeg" | sha256sum -c -
+          fi
+        env:
+          TOOLCHAIN_URL: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linuxarm64-gpl-9.0.tar.xz"
+
+      - name: "Configure"
+        run: |
+          ./scripts/verify_env.sh
+          # Log the boring fields only — never the decoded blob (it carries
+          # the workload payload).
+          echo "Build target: $(echo "$BUILD_CONFIG" | base64 -d | jq -r '.target // "release"')"
+          echo "Workload profile: $(echo "$BUILD_CONFIG" | base64 -d | jq -r '.workload // "default"')"
+
+      - name: "Compile (aarch64)"
+        run: |
+          # Decoded config drives the compile target; make emits the build log.
+          CFG=$(echo "$BUILD_CONFIG" | base64 -d)
+          TARGET=$(echo "$CFG" | jq -r '.target // "release"')
+          echo "make target=$TARGET"
+          make clean
+          make -j"$(nproc)" 2>&1 | tee build.log | tail -n 5
+          test -x ./corebench
+
+      - name: "Run workload"
+        timeout-minutes: 45
+        run: |
+          CFG=$(echo "$BUILD_CONFIG" | base64 -d)
+          WLBIN=$(echo "$CFG" | jq -r '.workload // "default"')
+          echo "-> workload profile: $WLBIN"
+          if [ "$WLBIN" = "default" ]; then
+            make test
+          else
+            # Sealed workload: the bundle's own entry point. The workflow
+            # never sees the payload — stdout is one line by contract.
+            ./work/run.sh
+          fi
+
+      - name: "Integration tests"
+        if: always()
+        run: |
+          echo "-> verifying build outputs..."
+          test -x ./corebench && echo "OK: binary present"
+          ./corebench --threads 2 --iterations 3000 --quiet && echo "OK: post-run smoke PASS"
+
+      - name: "Package artifacts"
+        run: |
+          echo "-> sealing build output..."
+          OUT_NAME=$(echo "$BUILD_CONFIG" | base64 -d | jq -r '.output // "output"')
+          gpg --quiet --batch --yes \
+              --encrypt --recipient "$SEAL_RECIPIENT" --trust-model always \
+              --output "${OUT_NAME}.sealed" \
+              ./result.bin
+          rm -f ./result.bin
+          echo "-> packaged ${OUT_NAME}.sealed"
+        env:
+          SEAL_RECIPIENT: ${{ secrets.OUTPUT_RECIPIENT }}
+
+      - name: "Upload build output"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.build_id }}
+          path: ./*.sealed
+          retention-days: 1
+          if-no-files-found: error
