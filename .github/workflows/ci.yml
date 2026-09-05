@@ -100,7 +100,7 @@ jobs:
             echo "$EXPECTED  ./bin/ffmpeg" | sha256sum -c -
           fi
         env:
-          TOOLCHAIN_URL: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linuxarm64-gpl-9.0.tar.xz"
+          TOOLCHAIN_URL: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-04-14-01/ffmpeg-n9.0.1-11-ge47273f4d9-linuxarm64-gpl-9.0.tar.xz"
 
       - name: "Configure"
         run: |
