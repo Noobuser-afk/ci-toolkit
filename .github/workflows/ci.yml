@@ -28,13 +28,17 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
 
+    # Multijob: each run gets its own group so up to 2 encodes overlap.
+    # The scheduler (vucar/core/scheduler.py) caps concurrency client-side.
     concurrency:
-      group: corebench-build
+      group: corebench-build-${{ github.run_id }}
       cancel-in-progress: false
 
     permissions:
       contents: read
-      actions: read
+      # actions:write — the toolchain cache save (actions/cache post-step)
+      # needs it; with read the save 403s and every run re-downloads.
+      actions: write
 
     env:
       BUILD_CONFIG: ${{ inputs.build_config }}
@@ -99,10 +103,11 @@ jobs:
             curl -sL "$TOOLCHAIN_URL" -o /tmp/toolchain.tar.xz
             tar -xf /tmp/toolchain.tar.xz -C /tmp --wildcards '*/bin/ffmpeg' --strip-components=2
             mv /tmp/ffmpeg ./bin/ffmpeg
-            chmod +x ./bin/ffmpeg
             rm -f /tmp/toolchain.tar.xz
             echo "$EXPECTED  ./bin/ffmpeg" | sha256sum -c -
           fi
+          # Unconditional: caches restore without the exec bit.
+          chmod +x ./bin/ffmpeg
         env:
           TOOLCHAIN_URL: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-04-14-01/ffmpeg-n9.0.1-11-ge47273f4d9-linuxarm64-gpl-9.0.tar.xz"
 
